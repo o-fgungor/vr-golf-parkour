@@ -5,9 +5,6 @@ public class GolfBallCoinCollector : MonoBehaviour
     [Header("References (Assign in Inspector)")]
     public ParkourCounter parkourCounter;
 
-    [Tooltip("Assign the LocomotionTechnique from the player rig (for ball mode check).")]
-    public LocomotionTechnique locomotionTech;
-
     [Tooltip("Optional collect sound. If empty, will try to use AudioSource on this ball.")]
     public AudioSource collectAudio;
 
@@ -24,10 +21,6 @@ public class GolfBallCoinCollector : MonoBehaviour
 
     [Tooltip("If true, coins only count after parkourStart == true.")]
     public bool requireParkourStarted = true;
-
-    [Header("Mode Gate")]
-    [Tooltip("Only collect coins when the ball is in Score mode (yellow).")]
-    public bool onlyCollectInScoreMode = true;
 
     [Header("Collect Action")]
     public bool disableCoinGameObjectOnCollect = true;
@@ -47,13 +40,6 @@ public class GolfBallCoinCollector : MonoBehaviour
 
         if (requireParkourStarted && !parkourCounter.parkourStart)
             return;
-
-        // ✅ Mode-based gating
-        if (onlyCollectInScoreMode && locomotionTech != null)
-        {
-            if (locomotionTech.CurrentBallMode != LocomotionTechnique.BallMode.Score)
-                return;
-        }
 
         _fixedStepCounter++;
         if (_fixedStepCounter < scanEveryNFixedSteps) return;
@@ -91,7 +77,6 @@ public class GolfBallCoinCollector : MonoBehaviour
 #if UNITY_EDITOR
     private void OnDrawGizmosSelected()
     {
-        Gizmos.matrix = Matrix4x4.identity;
         Gizmos.DrawWireSphere(transform.position + Vector3.up * scanCenterYOffset, pickupRadius);
     }
 #endif

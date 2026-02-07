@@ -27,6 +27,12 @@ public class SelectionTaskMeasure : MonoBehaviour
     public float partSumTime;
     public float partSumErr;
 
+    [Header("ObjectT manipulation smoothing")]
+    public float defaultPositionLerp = 12f;
+    public float defaultRotationLerp = 12f;
+    public Transform golfClubManipPoint; // GolfClub içindeki ObjectTManipPoint
+
+
 
     // Start is called before the first frame update
     void Start()
@@ -64,7 +70,26 @@ public class SelectionTaskMeasure : MonoBehaviour
         targetTStartingPos = taskUI.transform.position + taskUI.transform.forward * 0.75f + taskUI.transform.up * 1.2f;
         objectT = Instantiate(objectTPrefab, objectTStartingPos, new Quaternion(Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f)));
         targetT = Instantiate(targetTPrefab, targetTStartingPos, new Quaternion(Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f), Random.Range(0.0f, 1.0f)));
+    
+        AttachClubManipulator(objectT);
     }
+
+    private void AttachClubManipulator(GameObject obj)
+    {
+        if (obj == null) return;
+
+        var manip = obj.GetComponent<ClubDeltaManipulator>();
+        if (manip == null) manip = obj.AddComponent<ClubDeltaManipulator>();
+
+        manip.clubPoint = golfClubManipPoint;
+        manip.useAnalog = false; // RawButton ile basılı tut
+        manip.holdButton = OVRInput.RawButton.RIndexTrigger;
+        manip.freezeY = false;   // istersen true yap
+        
+        manip.positionLerp = defaultPositionLerp;
+        manip.rotationLerp = defaultRotationLerp;
+    }
+
 
     public void EndOneTask()
     {
