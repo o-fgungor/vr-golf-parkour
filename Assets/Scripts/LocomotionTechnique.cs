@@ -16,6 +16,8 @@ public class LocomotionTechnique : MonoBehaviour
 
     public enum BallMode { Teleport, Score }
 
+    public BallMode CurrentBallMode => currentBallMode;
+
     [Header("BALL MODE (Toggle with Right B)")]
     [SerializeField] private BallMode currentBallMode = BallMode.Teleport;
 
@@ -529,12 +531,13 @@ public class LocomotionTechnique : MonoBehaviour
             selectionTaskMeasure.taskUI.transform.Rotate(new Vector3(0, 180f, 0));
             selectionTaskMeasure.taskStartPanel.SetActive(true);
         }
-        else if (other.CompareTag("coin"))
-        {
-            parkourCounter.coinCount += 1;
-            GetComponent<AudioSource>().Play();
-            other.gameObject.SetActive(false);
-        }
+        // This part integrated in GolfBallCoinCollector.cs
+        // else if (other.CompareTag("coin"))
+        // {
+        //     parkourCounter.coinCount += 1;
+        //     GetComponent<AudioSource>().Play();
+        //     other.gameObject.SetActive(false);
+        // }
         // These are for the game mechanism.
     }
 }
