@@ -2,17 +2,25 @@ using UnityEngine;
 
 public class LocomotionTechnique : MonoBehaviour
 {
-    // Please implement your locomotion technique in this script.
     public OVRInput.Controller leftController;
     public OVRInput.Controller rightController;
-    [Range(0, 10)] public float translationGain = 0.5f; // legacy (not used for golf), keep for compatibility
+    [Range(0, 10)] public float translationGain = 0.5f;
     public GameObject hmd;
 
-    [Header("GOLF LOCOMOTION")]
-    [Tooltip("Rigidbody of the golf ball. Teleport happens when it stops.")]
-    [SerializeField] private Rigidbody golfBall;
+    public enum BallMode { TeleportBall, RedNoTeleport }
 
-    [Tooltip("If true, teleport triggers only after the ball moved at least once (hit).")]
+    [Header("BALL MODE (Toggle with Left Stick Click)")]
+    [SerializeField] private BallMode currentBallMode = BallMode.TeleportBall;
+
+    [Tooltip("Renderer of the golf ball to change its color. If empty, auto-find from golfBall.")]
+    [SerializeField] private Renderer golfBallRenderer;
+
+    [SerializeField] private Color teleportBallColor = Color.white;
+    [SerializeField] private Color redNoTeleportColor = Color.red;
+    private MaterialPropertyBlock _mpb;
+
+    [Header("GOLF LOCOMOTION")]
+    [SerializeField] private Rigidbody golfBall;
     [SerializeField] private bool requireBallMovementBeforeTeleport = true;
 
     [Header("STOP DETECTION (Teleport Trigger)")]
@@ -21,52 +29,25 @@ public class LocomotionTechnique : MonoBehaviour
     [SerializeField] private float stopHoldTime = 0.15f;
 
     [Header("TELEPORT OFFSETS")]
-    [Tooltip("Teleport to the LEFT of the ball (ball ends up on your RIGHT) by this amount.")]
     [SerializeField] private float teleportLeftOffsetMeters = 0.50f;
-
-    [Tooltip("Additionally, teleport slightly behind the ball.")]
     [SerializeField] private float teleportBackOffsetMeters = 0.10f;
-
-    [Tooltip("Keep current rig/root Y position (recommended).")]
     [SerializeField] private bool keepRigY = true;
 
     [Header("BALL PLACEMENT / DROP")]
-    [Tooltip("Place the ball at start so it is not under your feet.")]
     [SerializeField] private bool positionBallOnStart = true;
-
-    [Tooltip("Ball start offset to your RIGHT.")]
     [SerializeField] private float startRightOffsetMeters = 0.35f;
-
-    [Tooltip("Ball start offset in FRONT of you.")]
     [SerializeField] private float startForwardOffsetMeters = 0.80f;
-
-    [Tooltip("When placing/resetting ball, drop it from this height above ground (meters).")]
     [SerializeField] private float ballDropHeight = 0.20f;
-
-    [Tooltip("After placing/resetting ball, ignore teleport logic for this many seconds so it can fall and settle.")]
     [SerializeField] private float ignoreTeleportAfterReset = 0.60f;
 
     [Header("RECALL / RESET (X/Y)")]
     [SerializeField] private Vector3 clubRotationOffsetEuler = new Vector3(0f, 0f, 0f);
-    [Tooltip("Root transform of the golf club prefab in the scene.")]
     [SerializeField] private Transform golfClubRoot;
-
-    [Tooltip("Optional rigidbody of the golf club root (recommended).")]
     [SerializeField] private Rigidbody golfClubRb;
-
-    [Tooltip("Where to place club relative to your head (forward).")]
     [SerializeField] private float clubForwardMeters = 0.80f;
-
-    [Tooltip("Where to place club relative to your head (right).")]
     [SerializeField] private float clubRightMeters = 0.20f;
-
-    [Tooltip("Extra up offset for club spawn.")]
     [SerializeField] private float clubUpMeters = 0.00f;
-
-    [Tooltip("Ball reset offset to your RIGHT.")]
     [SerializeField] private float ballRestartRightMeters = 0.35f;
-
-    [Tooltip("Ball reset offset in FRONT of you.")]
     [SerializeField] private float ballRestartForwardMeters = 0.80f;
 
     [Header("BANNER TRIGGER FIX (Teleport may skip triggers)")]
@@ -78,27 +59,21 @@ public class LocomotionTechnique : MonoBehaviour
     [SerializeField] private bool respawnSnapToGround = false;
     [SerializeField] private float respawnGroundRayUp = 3f;
     [SerializeField] private float respawnGroundRayDown = 10f;
-    [SerializeField] private float respawnGroundYOffset = 0f; // gerekirse +0.02 gibi
+    [SerializeField] private float respawnGroundYOffset = 0f;
 
     [Header("SIMPLE SPRINT BOOST (adds extra movement on top of existing locomotion)")]
     [SerializeField] private bool enableSprintBoost = true;
-    [SerializeField] private float sprintExtraMultiplier = 2f;   // 2 = toplam ~3x (1x mevcut + 2x ekstra)
+    [SerializeField] private float sprintExtraMultiplier = 2f;
     [SerializeField] private float stickDeadzone = 0.15f;
     [Range(0f, 1f)] [SerializeField] private float sprintTriggerThreshold = 0.2f;
-
 
     // stop/teleport state
     private float stillTimer;
     private bool ballHasMoved;
-
-    // teleport arming: prevents teleport after reset/drop until real movement happens
     private bool _teleportArmed = false;
-
-    // ignore teleport for a short window after reset/spawn
     private float _ignoreTeleportUntil = 0f;
 
     /////////////////////////////////////////////////////////
-    // These are for the game mechanism.
     public ParkourCounter parkourCounter;
     public string stage;
     public SelectionTaskMeasure selectionTaskMeasure;
@@ -109,12 +84,25 @@ public class LocomotionTechnique : MonoBehaviour
         stillTimer = 0f;
         ballHasMoved = false;
 
+        _mpb = new MaterialPropertyBlock();
+
+        if (golfBallRenderer == null && golfBall != null)
+            golfBallRenderer = golfBall.GetComponentInChildren<Renderer>();
+
+        ApplyBallModeVisual();
+
         if (positionBallOnStart && golfBall != null && hmd != null)
             PlaceBallAtStart();
     }
 
     void Update()
     {
+        // MODE TOGGLE: Left stick click
+        if (OVRInput.GetDown(OVRInput.RawButton.LThumbstick))
+        {
+            ToggleBallMode();
+        }
+
         // Left controller X -> Restart ball near player
         if (OVRInput.GetDown(OVRInput.RawButton.X))
         {
@@ -127,60 +115,20 @@ public class LocomotionTechnique : MonoBehaviour
             RecallGolfClubInFront();
         }
 
-        // Teleport decision (ALWAYS ON)
-        if (golfBall != null && hmd != null)
+        // TELEPORT: sadece TeleportBall modunda çalışsın
+        if (currentBallMode == BallMode.TeleportBall)
         {
-            bool ignoreTeleport = Time.time < _ignoreTeleportUntil;
-            bool grounded = IsBallGrounded();
-
-            float linearSpeed = golfBall.linearVelocity.magnitude;
-            float angularSpeed = golfBall.angularVelocity.magnitude;
-
-            // movement detection: if ball is moving, arm teleport (after reset window)
-            if (linearSpeed > stopSpeedThreshold || angularSpeed > stopAngularThreshold)
-            {
-                ballHasMoved = true;
-                stillTimer = 0f;
-
-                if (!ignoreTeleport)
-                    _teleportArmed = true;
-            }
-
-            if (!ignoreTeleport && grounded)
-            {
-                if ((!requireBallMovementBeforeTeleport || ballHasMoved) && _teleportArmed)
-                {
-                    bool isStill = (linearSpeed <= stopSpeedThreshold && angularSpeed <= stopAngularThreshold);
-
-                    if (isStill)
-                    {
-                        stillTimer += Time.deltaTime;
-                        if (stillTimer >= stopHoldTime)
-                        {
-                            TeleportToBallLeftSide();
-                            stillTimer = 0f;
-
-                            // After teleport, require new movement again
-                            _teleportArmed = false;
-
-                            if (requireBallMovementBeforeTeleport)
-                                ballHasMoved = false;
-                        }
-                    }
-                    else
-                    {
-                        stillTimer = 0f;
-                    }
-                }
-                else
-                {
-                    stillTimer = 0f;
-                }
-            }
+            RunTeleportLogic();
+        }
+        else
+        {
+            // No-teleport modunda state'i sıfır tut (yanlışlıkla teleport tetiklenmesin)
+            stillTimer = 0f;
+            ballHasMoved = false;
+            _teleportArmed = false;
         }
 
-        ////////////////////////////////////////////////////////////////////////////////
-        // These are for the game mechanism.
+        // Respawn (B)
         if (OVRInput.GetDown(OVRInput.RawButton.B))
         {
             if (parkourCounter != null && parkourCounter.parkourStart)
@@ -188,7 +136,8 @@ public class LocomotionTechnique : MonoBehaviour
                 RespawnStableTo(parkourCounter.currentRespawnPos);
             }
         }
-        
+
+        // Sprint boost (LT + left stick)
         if (enableSprintBoost && hmd != null)
         {
             float lt = OVRInput.Get(OVRInput.RawAxis1D.LIndexTrigger);
@@ -197,43 +146,110 @@ public class LocomotionTechnique : MonoBehaviour
                 Vector2 stick = OVRInput.Get(OVRInput.RawAxis2D.LThumbstick);
                 if (stick.magnitude >= stickDeadzone)
                 {
-                    // yönü kafanın yaw'ına göre al
                     Vector3 fwd = hmd.transform.forward; fwd.y = 0f; fwd.Normalize();
                     Vector3 right = hmd.transform.right; right.y = 0f; right.Normalize();
 
-                    // Meta locomotion zaten 1x gidiyor; biz ekstra 2x kadar daha ekliyoruz => ~3x hissi
                     Vector3 extraMove = (right * stick.x + fwd * stick.y) * (sprintExtraMultiplier * Time.deltaTime);
-
                     transform.position += extraMove;
                 }
             }
         }
+    }
 
+    private void ToggleBallMode()
+    {
+        currentBallMode = (currentBallMode == BallMode.TeleportBall)
+            ? BallMode.RedNoTeleport
+            : BallMode.TeleportBall;
+
+        ApplyBallModeVisual();
+
+        // Mode değişince teleport state temizle
+        stillTimer = 0f;
+        ballHasMoved = false;
+        _teleportArmed = false;
+        _ignoreTeleportUntil = Time.time + 0.15f;
+
+        Debug.Log($"[LocomotionTechnique] Ball mode -> {currentBallMode}");
+    }
+
+    private void ApplyBallModeVisual()
+    {
+        if (golfBallRenderer == null) return;
+
+        Color col = (currentBallMode == BallMode.TeleportBall) ? teleportBallColor : redNoTeleportColor;
+
+        golfBallRenderer.GetPropertyBlock(_mpb);
+        _mpb.SetColor("_Color", col);
+        _mpb.SetColor("_BaseColor", col); // URP/Lit
+        golfBallRenderer.SetPropertyBlock(_mpb);
+    }
+
+    private void RunTeleportLogic()
+    {
+        if (golfBall == null || hmd == null) return;
+
+        bool ignoreTeleport = Time.time < _ignoreTeleportUntil;
+        bool grounded = IsBallGrounded();
+
+        float linearSpeed = golfBall.linearVelocity.magnitude;
+        float angularSpeed = golfBall.angularVelocity.magnitude;
+
+        if (linearSpeed > stopSpeedThreshold || angularSpeed > stopAngularThreshold)
+        {
+            ballHasMoved = true;
+            stillTimer = 0f;
+            if (!ignoreTeleport) _teleportArmed = true;
+        }
+
+        if (!ignoreTeleport && grounded)
+        {
+            if ((!requireBallMovementBeforeTeleport || ballHasMoved) && _teleportArmed)
+            {
+                bool isStill = (linearSpeed <= stopSpeedThreshold && angularSpeed <= stopAngularThreshold);
+
+                if (isStill)
+                {
+                    stillTimer += Time.deltaTime;
+                    if (stillTimer >= stopHoldTime)
+                    {
+                        TeleportToBallLeftSide();
+                        stillTimer = 0f;
+
+                        _teleportArmed = false;
+                        if (requireBallMovementBeforeTeleport)
+                            ballHasMoved = false;
+                    }
+                }
+                else
+                {
+                    stillTimer = 0f;
+                }
+            }
+            else
+            {
+                stillTimer = 0f;
+            }
+        }
     }
 
     private void TeleportToBallLeftSide()
     {
         if (golfBall == null || hmd == null) return;
 
-        // Teleport "before" head pos for banner sweep
         Vector3 headBefore = hmd.transform.position;
-
         Vector3 ballPos = golfBall.position;
 
-        Vector3 right = hmd.transform.right;
-        right.y = 0f;
+        Vector3 right = hmd.transform.right; right.y = 0f;
         if (right.sqrMagnitude < 0.0001f) right = Vector3.right;
         right.Normalize();
 
-        Vector3 forward = hmd.transform.forward;
-        forward.y = 0f;
+        Vector3 forward = hmd.transform.forward; forward.y = 0f;
         if (forward.sqrMagnitude < 0.0001f) forward = Vector3.forward;
         forward.Normalize();
 
-        // We want HEAD to end up here (ball on your right)
         Vector3 desiredHeadWorld = ballPos - right * teleportLeftOffsetMeters - forward * teleportBackOffsetMeters;
 
-        // Move rig so that head reaches desiredHeadWorld
         Vector3 headPos = hmd.transform.position;
         Vector3 rigPos = transform.position;
 
@@ -244,10 +260,8 @@ public class LocomotionTechnique : MonoBehaviour
         Vector3 newRigPos = new Vector3(desiredHeadWorld.x, 0f, desiredHeadWorld.z) + rigFromHeadXZ;
         newRigPos.y = keepRigY ? transform.position.y : rigPos.y;
 
-        // TELEPORT
         transform.position = newRigPos;
 
-        // Banner fix: treat teleport as if we physically crossed any banner trigger
         ForceBannerTriggerBetween(headBefore, desiredHeadWorld);
     }
 
@@ -255,10 +269,8 @@ public class LocomotionTechnique : MonoBehaviour
     {
         if (parkourCounter == null) return;
 
-        // 1) If we land inside a banner trigger volume, trigger it
         if (TryTriggerBannerAtPosition(toHeadExpected)) return;
 
-        // 2) Sweep between the points to detect skipped banners
         Vector3 delta = toHeadExpected - fromHead;
         float dist = delta.magnitude;
         if (dist < 0.001f) return;
@@ -362,11 +374,7 @@ public class LocomotionTechnique : MonoBehaviour
 
     private void RestartBallNearPlayer()
     {
-        if (golfBall == null || hmd == null)
-        {
-            Debug.LogWarning($"[LocomotionTechnique] RestartBallNearPlayer blocked. golfBall={(golfBall ? "OK" : "NULL")} hmd={(hmd ? "OK" : "NULL")}");
-            return;
-        }
+        if (golfBall == null || hmd == null) return;
 
         Vector3 headPos = hmd.transform.position;
 
@@ -392,11 +400,7 @@ public class LocomotionTechnique : MonoBehaviour
 
     private void RecallGolfClubInFront()
     {
-        if (golfClubRoot == null || hmd == null)
-        {
-            Debug.LogWarning($"[LocomotionTechnique] RecallGolfClubInFront blocked. golfClubRoot={(golfClubRoot ? "OK" : "NULL")} hmd={(hmd ? "OK" : "NULL")}");
-            return;
-        }
+        if (golfClubRoot == null || hmd == null) return;
 
         Vector3 headPos = hmd.transform.position;
 
@@ -405,7 +409,6 @@ public class LocomotionTechnique : MonoBehaviour
 
         Vector3 target = headPos + forward * clubForwardMeters + right * clubRightMeters + Vector3.up * clubUpMeters;
         Quaternion yaw = Quaternion.LookRotation(forward, Vector3.up) * Quaternion.Euler(clubRotationOffsetEuler);
-
 
         if (golfClubRb != null)
         {
@@ -485,7 +488,7 @@ public class LocomotionTechnique : MonoBehaviour
             float tempValueY = other.transform.position.y > 0 ? 12 : 0;
             Vector3 tmpTarget = new(hmd.transform.position.x, tempValueY, hmd.transform.position.z);
             selectionTaskMeasure.taskUI.transform.LookAt(tmpTarget);
-            selectionTaskMeasure.taskUI.transform.Rotate(new Vector3(0, 180f, 0));
+            selectionTaskMeasure.taskUI.transform.Rotate(new Vector3(-60, 180f, 0));
             selectionTaskMeasure.taskStartPanel.SetActive(true);
         }
     }
@@ -494,38 +497,26 @@ public class LocomotionTechnique : MonoBehaviour
     {
         if (hmd == null) return;
 
-        // 1) HMD->Rig yatay offsetini (XZ) hesapla
         Vector3 headPos = hmd.transform.position;
-        Vector3 rigPos  = transform.position;
+        Vector3 rigPos = transform.position;
 
         Vector3 headXZ = new Vector3(headPos.x, 0f, headPos.z);
-        Vector3 rigXZ  = new Vector3(rigPos.x, 0f, rigPos.z);
-
-        // rig = head + (rig-head) offset
+        Vector3 rigXZ = new Vector3(rigPos.x, 0f, rigPos.z);
         Vector3 rigFromHeadXZ = rigXZ - headXZ;
 
-        // 2) Hedef: HMD XZ respawnPoint XZ olsun
         Vector3 newRigPos = new Vector3(respawnPoint.x, 0f, respawnPoint.z) + rigFromHeadXZ;
 
-        // 3) Y yönetimi (stabil seçenek: rig Y sabit)
-        if (respawnKeepCurrentRigY)
-            newRigPos.y = transform.position.y;
-        else
-            newRigPos.y = respawnPoint.y;
+        newRigPos.y = respawnKeepCurrentRigY ? transform.position.y : respawnPoint.y;
 
-        // 4) (Opsiyonel) Ground'a snap
         if (respawnSnapToGround)
         {
             Vector3 rayOrigin = new Vector3(newRigPos.x, newRigPos.y, newRigPos.z) + Vector3.up * respawnGroundRayUp;
             float rayLen = respawnGroundRayUp + respawnGroundRayDown;
 
             if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, rayLen, ~0, QueryTriggerInteraction.Ignore))
-            {
                 newRigPos.y = hit.point.y + respawnGroundYOffset;
-            }
         }
 
-        // 5) Teleport/physics state’i temizle (teleport logic anlık tetiklenmesin)
         stillTimer = 0f;
         ballHasMoved = false;
         _teleportArmed = false;
@@ -533,5 +524,4 @@ public class LocomotionTechnique : MonoBehaviour
 
         transform.position = newRigPos;
     }
-
 }

@@ -11,6 +11,9 @@ TagManager:
   - done
   - objectInteractionTask
   - GolfClub
+  - hole
+  - GolfBall
+  - HoleLid
   layers:
   - Default
   - TransparentFX
@@ -19,8 +22,8 @@ TagManager:
   - Water
   - UI
   - locomotion
-  - 
-  - 
+  - GolfBall
+  - HoleLid
   - 
   - 
   - 
